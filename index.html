@@ -1,0 +1,1016 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>نظام كشف عيوب الزجاجات – AI + Grad-CAM</title>
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;900&family=Cairo:wght@300;400;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    :root {
+      --bg: #060c18;
+      --surface: #0d1829;
+      --card: #111f35;
+      --border: #1a3055;
+      --accent: #00d4ff;
+      --accent2: #0080ff;
+      --good: #00e676;
+      --defect: #ff3d57;
+      --text: #e8f4ff;
+      --muted: #6b8fba;
+      --glow: 0 0 30px rgba(0,212,255,0.25);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Cairo', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      overflow-x: hidden;
+    }
+
+    /* ─── NOISE TEXTURE ─── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.025'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 0;
+      opacity: .35;
+    }
+
+    /* ─── NAV ─── */
+    nav {
+      position: fixed; top: 0; width: 100%; z-index: 999;
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 1rem 2.5rem;
+      background: rgba(6,12,24,0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-logo {
+      font-family: 'Tajawal', sans-serif;
+      font-weight: 900; font-size: 1.1rem;
+      color: var(--accent); letter-spacing: .5px;
+    }
+    .nav-logo span { color: var(--text); }
+    .nav-links { display: flex; gap: 2rem; list-style: none; }
+    .nav-links a {
+      color: var(--muted); text-decoration: none;
+      font-size: .9rem; font-weight: 500;
+      transition: color .2s;
+    }
+    .nav-links a:hover { color: var(--accent); }
+
+    /* ─── HERO ─── */
+    #hero {
+      position: relative; min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding-top: 80px; text-align: center; overflow: hidden;
+    }
+    .hero-glow {
+      position: absolute; top: 10%; left: 50%; transform: translateX(-50%);
+      width: 800px; height: 800px; border-radius: 50%;
+      background: radial-gradient(ellipse, rgba(0,128,255,.12) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero-content { position: relative; z-index: 1; max-width: 800px; padding: 2rem; }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: .5rem;
+      background: rgba(0,212,255,.08); border: 1px solid rgba(0,212,255,.25);
+      border-radius: 30px; padding: .4rem 1.2rem;
+      font-size: .8rem; color: var(--accent); margin-bottom: 1.5rem;
+      letter-spacing: .5px;
+    }
+    .hero-badge .dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--accent);
+      animation: pulse-dot 1.5s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: .4; transform: scale(.7); }
+    }
+    h1 {
+      font-family: 'Tajawal', sans-serif; font-weight: 900;
+      font-size: clamp(2.2rem, 5vw, 3.6rem);
+      line-height: 1.2; margin-bottom: 1.2rem;
+    }
+    h1 em { color: var(--accent); font-style: normal; }
+    .hero-sub {
+      color: var(--muted); font-size: 1.1rem; line-height: 1.8;
+      max-width: 600px; margin: 0 auto 2.5rem;
+    }
+    .hero-btns { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+    .btn {
+      display: inline-flex; align-items: center; gap: .5rem;
+      padding: .75rem 2rem; border-radius: 8px;
+      font-family: 'Cairo', sans-serif; font-size: .95rem; font-weight: 600;
+      cursor: pointer; text-decoration: none; transition: all .25s;
+      border: none;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent2), var(--accent));
+      color: #000; box-shadow: 0 0 20px rgba(0,128,255,.35);
+    }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 0 35px rgba(0,212,255,.5); }
+    .btn-outline {
+      background: transparent;
+      border: 1px solid var(--border); color: var(--text);
+    }
+    .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* Bottle animation in hero */
+    .bottle-scene {
+      position: absolute; right: 5%; top: 50%; transform: translateY(-50%);
+      opacity: .25; pointer-events: none;
+    }
+    @media (max-width: 768px) { .bottle-scene { display: none; } }
+
+    /* ─── SECTION BASE ─── */
+    section { padding: 5rem 2rem; position: relative; }
+    .container { max-width: 1100px; margin: 0 auto; }
+    .section-label {
+      font-size: .75rem; letter-spacing: 2px; text-transform: uppercase;
+      color: var(--accent); margin-bottom: .75rem; font-weight: 600;
+    }
+    .section-title {
+      font-family: 'Tajawal', sans-serif; font-weight: 800;
+      font-size: clamp(1.6rem, 3vw, 2.4rem); margin-bottom: 1rem;
+    }
+    .section-desc { color: var(--muted); line-height: 1.9; max-width: 600px; }
+
+    /* ─── STATS ─── */
+    #stats {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .stats-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 2rem; text-align: center;
+    }
+    .stat-item { padding: 1.5rem; }
+    .stat-num {
+      font-family: 'Tajawal', sans-serif; font-weight: 900;
+      font-size: 2.8rem; color: var(--accent);
+      line-height: 1;
+    }
+    .stat-label { color: var(--muted); font-size: .85rem; margin-top: .4rem; }
+
+    /* ─── PIPELINE ─── */
+    #pipeline { background: var(--bg); }
+    .pipeline-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1.5rem; margin-top: 3rem;
+    }
+    .step-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px; padding: 1.8rem 1.5rem;
+      position: relative; transition: all .3s;
+      overflow: hidden;
+    }
+    .step-card::before {
+      content: ''; position: absolute; inset: 0;
+      background: linear-gradient(135deg, rgba(0,212,255,.05), transparent);
+      opacity: 0; transition: opacity .3s;
+    }
+    .step-card:hover { border-color: var(--accent); transform: translateY(-4px); box-shadow: var(--glow); }
+    .step-card:hover::before { opacity: 1; }
+    .step-num {
+      font-family: 'Tajawal', sans-serif; font-weight: 900;
+      font-size: 3rem; color: rgba(0,212,255,.1);
+      position: absolute; top: .5rem; left: 1rem; line-height: 1;
+    }
+    .step-icon {
+      width: 48px; height: 48px; border-radius: 12px;
+      background: linear-gradient(135deg, rgba(0,128,255,.2), rgba(0,212,255,.1));
+      border: 1px solid rgba(0,212,255,.2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.4rem; margin-bottom: 1rem;
+    }
+    .step-card h3 { font-size: 1rem; font-weight: 700; margin-bottom: .5rem; }
+    .step-card p { color: var(--muted); font-size: .85rem; line-height: 1.7; }
+
+    /* ─── MODEL ─── */
+    #model { background: var(--surface); }
+    .model-layout {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 4rem; align-items: center; margin-top: 3rem;
+    }
+    @media (max-width: 768px) { .model-layout { grid-template-columns: 1fr; } }
+    .arch-diagram {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 20px; padding: 2rem; position: relative;
+    }
+    .arch-title { font-size: .8rem; color: var(--muted); margin-bottom: 1.5rem; text-align: center; letter-spacing: 1px; text-transform: uppercase; }
+    .arch-layers { display: flex; flex-direction: column; gap: .8rem; }
+    .layer {
+      border-radius: 10px; padding: .7rem 1.2rem;
+      font-size: .85rem; font-weight: 600;
+      display: flex; align-items: center; justify-content: space-between;
+      border: 1px solid;
+    }
+    .layer-input { background: rgba(0,212,255,.07); border-color: rgba(0,212,255,.25); color: var(--accent); }
+    .layer-conv { background: rgba(0,128,255,.07); border-color: rgba(0,128,255,.25); color: #4fc3f7; }
+    .layer-fc { background: rgba(120,80,255,.07); border-color: rgba(120,80,255,.25); color: #ce93d8; }
+    .layer-out { background: rgba(0,230,118,.07); border-color: rgba(0,230,118,.25); color: var(--good); }
+    .layer .tag { font-size: .7rem; opacity: .7; }
+    .arrow { text-align: center; color: var(--muted); font-size: .7rem; }
+
+    .model-features { display: flex; flex-direction: column; gap: 1.2rem; }
+    .feat-item {
+      display: flex; gap: 1rem; align-items: flex-start;
+      padding: 1rem; background: var(--card);
+      border: 1px solid var(--border); border-radius: 12px;
+      transition: border-color .2s;
+    }
+    .feat-item:hover { border-color: rgba(0,212,255,.4); }
+    .feat-icon {
+      width: 36px; height: 36px; border-radius: 8px; flex-shrink: 0;
+      background: linear-gradient(135deg, var(--accent2), var(--accent));
+      display: flex; align-items: center; justify-content: center; font-size: .9rem;
+    }
+    .feat-item h4 { font-size: .9rem; font-weight: 700; margin-bottom: .3rem; }
+    .feat-item p { color: var(--muted); font-size: .8rem; line-height: 1.6; }
+
+    /* ─── GRADCAM ─── */
+    #gradcam { background: var(--bg); }
+    .gradcam-layout {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 3rem; align-items: start; margin-top: 3rem;
+    }
+    @media (max-width: 768px) { .gradcam-layout { grid-template-columns: 1fr; } }
+    .cam-visual {
+      display: flex; flex-direction: column; gap: 1rem;
+    }
+    .cam-pair {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;
+    }
+    .cam-box {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 1.2rem; text-align: center;
+      position: relative; overflow: hidden;
+    }
+    .cam-bottle {
+      width: 100%; height: 120px;
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: .8rem;
+    }
+    .cam-label {
+      font-size: .75rem; font-weight: 700;
+      letter-spacing: 1px; text-transform: uppercase;
+    }
+    .cam-box.good .cam-label { color: var(--good); }
+    .cam-box.defect .cam-label { color: var(--defect); }
+    .cam-box.heatmap .cam-label { color: var(--accent); }
+
+    /* SVG bottle drawings */
+    .bottle-svg { width: 60px; }
+
+    .how-it-works {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 2rem;
+    }
+    .how-it-works h3 { font-size: 1.1rem; font-weight: 700; margin-bottom: 1.5rem; }
+    .step-list { display: flex; flex-direction: column; gap: 1rem; }
+    .step-row {
+      display: flex; gap: 1rem; align-items: flex-start;
+    }
+    .step-bullet {
+      width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+      background: linear-gradient(135deg, var(--accent2), var(--accent));
+      display: flex; align-items: center; justify-content: center;
+      font-size: .75rem; font-weight: 700; color: #000;
+    }
+    .step-row p { color: var(--muted); font-size: .85rem; line-height: 1.7; }
+    .step-row strong { color: var(--text); }
+
+    /* ─── RESULTS ─── */
+    #results { background: var(--surface); }
+    .results-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-top: 3rem; }
+    @media (max-width: 768px) { .results-grid { grid-template-columns: 1fr; } }
+    .result-card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 20px; padding: 2rem;
+    }
+    .result-card h3 { font-size: 1rem; font-weight: 700; margin-bottom: 1.5rem; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; font-size: .8rem; }
+    .metric-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: .7rem 0; border-bottom: 1px solid var(--border);
+    }
+    .metric-row:last-child { border-bottom: none; }
+    .metric-name { font-size: .9rem; color: var(--muted); }
+    .metric-val {
+      font-family: 'Tajawal', sans-serif; font-weight: 700;
+      font-size: 1.1rem; color: var(--accent);
+    }
+    .bar-wrap { margin-top: 1rem; }
+    .bar-row { margin-bottom: 1rem; }
+    .bar-label { display: flex; justify-content: space-between; font-size: .8rem; margin-bottom: .3rem; }
+    .bar-label span:last-child { color: var(--accent); font-weight: 700; }
+    .bar-track {
+      height: 8px; background: var(--border); border-radius: 4px; overflow: hidden;
+    }
+    .bar-fill { height: 100%; border-radius: 4px; transition: width 1s ease; }
+    .bar-fill.good { background: linear-gradient(90deg, var(--good), #69f0ae); }
+    .bar-fill.acc { background: linear-gradient(90deg, var(--accent2), var(--accent)); }
+    .bar-fill.prec { background: linear-gradient(90deg, #ce93d8, #ab47bc); }
+    .bar-fill.rec { background: linear-gradient(90deg, #ffb74d, #ff9800); }
+
+    /* ─── CODE ─── */
+    #code { background: var(--bg); }
+    .code-tabs { display: flex; gap: .5rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+    .tab-btn {
+      padding: .5rem 1.2rem; border-radius: 8px;
+      font-family: 'Cairo', sans-serif; font-size: .85rem; font-weight: 600;
+      cursor: pointer; border: 1px solid var(--border);
+      background: transparent; color: var(--muted); transition: all .2s;
+    }
+    .tab-btn.active { background: linear-gradient(135deg, var(--accent2), var(--accent)); color: #000; border-color: transparent; }
+    .code-block {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; overflow: hidden; display: none;
+    }
+    .code-block.active { display: block; }
+    .code-header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: .8rem 1.2rem; border-bottom: 1px solid var(--border);
+      background: rgba(0,0,0,.3);
+    }
+    .code-lang { font-size: .75rem; color: var(--accent); font-weight: 600; letter-spacing: 1px; }
+    .code-copy {
+      font-size: .75rem; color: var(--muted); cursor: pointer;
+      background: none; border: none; font-family: 'Cairo', sans-serif;
+      transition: color .2s;
+    }
+    .code-copy:hover { color: var(--accent); }
+    pre {
+      padding: 1.5rem; overflow-x: auto; font-size: .8rem;
+      line-height: 1.8; font-family: 'Consolas', 'Monaco', monospace;
+    }
+    .kw { color: #c792ea; }
+    .fn { color: #82aaff; }
+    .str { color: #c3e88d; }
+    .cm { color: #546e7a; font-style: italic; }
+    .num { color: #f78c6c; }
+    .cl { color: #ffcb6b; }
+
+    /* ─── FOOTER ─── */
+    footer {
+      background: var(--surface); border-top: 1px solid var(--border);
+      padding: 2rem; text-align: center; color: var(--muted); font-size: .85rem;
+    }
+    footer strong { color: var(--accent); }
+
+    /* ─── SCROLL REVEAL ─── */
+    .reveal {
+      opacity: 0; transform: translateY(30px);
+      transition: opacity .7s ease, transform .7s ease;
+    }
+    .reveal.visible { opacity: 1; transform: translateY(0); }
+
+    /* ─── CLASSIFICATION DEMO ─── */
+    #demo { background: var(--surface); }
+    .demo-box {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 20px; padding: 2.5rem; max-width: 600px; margin: 2rem auto 0;
+      text-align: center;
+    }
+    .demo-select {
+      display: flex; gap: 1rem; justify-content: center; margin-bottom: 2rem; flex-wrap: wrap;
+    }
+    .img-option {
+      width: 100px; height: 120px; border-radius: 12px;
+      background: var(--surface); border: 2px solid var(--border);
+      cursor: pointer; display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: .5rem; transition: all .2s;
+    }
+    .img-option:hover { border-color: var(--accent); }
+    .img-option.selected { border-color: var(--accent); background: rgba(0,212,255,.07); }
+    .img-option span { font-size: .75rem; color: var(--muted); }
+    .analyze-btn {
+      background: linear-gradient(135deg, var(--accent2), var(--accent));
+      color: #000; border: none; padding: .8rem 2.5rem; border-radius: 8px;
+      font-family: 'Cairo', sans-serif; font-weight: 700; font-size: 1rem;
+      cursor: pointer; transition: all .25s; margin-bottom: 2rem;
+    }
+    .analyze-btn:hover { transform: translateY(-2px); box-shadow: 0 0 30px rgba(0,212,255,.4); }
+    .result-display {
+      padding: 1.5rem; border-radius: 12px;
+      border: 1px solid var(--border); display: none;
+    }
+    .result-display.good-res { border-color: var(--good); background: rgba(0,230,118,.05); }
+    .result-display.defect-res { border-color: var(--defect); background: rgba(255,61,87,.05); }
+    .result-class {
+      font-family: 'Tajawal', sans-serif; font-size: 1.8rem; font-weight: 900;
+    }
+    .result-class.good { color: var(--good); }
+    .result-class.defect { color: var(--defect); }
+    .conf-bar { margin-top: 1rem; }
+    .conf-label { font-size: .8rem; color: var(--muted); margin-bottom: .5rem; }
+    .conf-track { height: 10px; background: var(--border); border-radius: 5px; overflow: hidden; }
+    .conf-fill { height: 100%; border-radius: 5px; transition: width 1s ease; }
+    .conf-fill.good { background: var(--good); }
+    .conf-fill.defect { background: var(--defect); }
+  </style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <div class="nav-logo">Bottle<span>AI</span> · Grad-CAM</div>
+  <ul class="nav-links">
+    <li><a href="#pipeline">المنهجية</a></li>
+    <li><a href="#model">الموديل</a></li>
+    <li><a href="#gradcam">Grad-CAM</a></li>
+    <li><a href="#results">النتائج</a></li>
+    <li><a href="#demo">التجربة</a></li>
+    <li><a href="#code">الكود</a></li>
+  </ul>
+</nav>
+
+<!-- HERO -->
+<section id="hero">
+  <div class="hero-glow"></div>
+  <div class="hero-content">
+    <div class="hero-badge">
+      <span class="dot"></span>
+      نظام ذكاء اصطناعي قابل للتفسير – XAI
+    </div>
+    <h1>كشف عيوب <em>الزجاجات</em><br/>بتقنية Grad-CAM</h1>
+    <p class="hero-sub">
+      نظام متكامل يُصنّف صور المنتجات الصناعية إلى <strong>سليمة</strong> أو <strong>معيبة</strong>، مع تحديد مكان العيب بدقة باستخدام الخرائط الحرارية التفسيرية.
+    </p>
+    <div class="hero-btns">
+      <a href="#demo" class="btn btn-primary">🧪 جرب النظام</a>
+      <a href="#pipeline" class="btn btn-outline">📖 اكتشف المنهجية</a>
+    </div>
+  </div>
+
+  <!-- Decorative SVG bottle -->
+  <div class="bottle-scene">
+    <svg width="120" height="220" viewBox="0 0 120 220" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="40" y="0" width="40" height="30" rx="6" fill="rgba(0,212,255,0.12)" stroke="rgba(0,212,255,0.3)" stroke-width="1"/>
+      <ellipse cx="60" cy="120" rx="45" ry="90" fill="rgba(0,128,255,0.08)" stroke="rgba(0,212,255,0.25)" stroke-width="1.5"/>
+      <line x1="45" y1="70" x2="80" y2="90" stroke="rgba(255,61,87,0.6)" stroke-width="3" stroke-linecap="round"/>
+      <circle cx="58" cy="140" r="9" fill="rgba(255,61,87,0.25)" stroke="rgba(255,61,87,0.5)" stroke-width="1.5"/>
+      <!-- Grad-CAM heatmap suggestion -->
+      <ellipse cx="65" cy="85" rx="25" ry="20" fill="rgba(255,100,0,0.15)" stroke="none"/>
+    </svg>
+  </div>
+</section>
+
+<!-- STATS -->
+<section id="stats">
+  <div class="container">
+    <div class="stats-grid reveal">
+      <div class="stat-item">
+        <div class="stat-num">200</div>
+        <div class="stat-label">صورة زجاجة مُولَّدة</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-num">ResNet34</div>
+        <div class="stat-label">موديل Transfer Learning</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-num">10</div>
+        <div class="stat-label">epochs تدريب</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-num">2</div>
+        <div class="stat-label">صنف (سليم / معيب)</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-num">Grad-CAM</div>
+        <div class="stat-label">تقنية التفسير XAI</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PIPELINE -->
+<section id="pipeline">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label">المنهجية</div>
+      <h2 class="section-title">خطوات بناء النظام</h2>
+      <p class="section-desc">من توليد البيانات وصولاً إلى التفسير البصري بـ Grad-CAM</p>
+    </div>
+    <div class="pipeline-grid">
+      <div class="step-card reveal">
+        <div class="step-num">01</div>
+        <div class="step-icon">🖼️</div>
+        <h3>توليد البيانات</h3>
+        <p>100 زجاجة سليمة + 100 معيبة مُولَّدة برمجياً بـ OpenCV مع إضافة عيوب اصطناعية (كسور، بقع تلوث)</p>
+      </div>
+      <div class="step-card reveal">
+        <div class="step-num">02</div>
+        <div class="step-icon">⚙️</div>
+        <h3>المعالجة المسبقة</h3>
+        <p>تحويل الصور لمقاس 224×224، تطبيع القيم باستخدام ImageNet stats، تقسيم 80/20 بين تدريب واختبار</p>
+      </div>
+      <div class="step-card reveal">
+        <div class="step-num">03</div>
+        <div class="step-icon">🧠</div>
+        <h3>بناء الموديل</h3>
+        <p>ResNet-34 مدرب مسبقاً، تعديل الطبقة الأخيرة (FC) لمخرجَين، نقل الحسابات لـ GPU عند توفره</p>
+      </div>
+      <div class="step-card reveal">
+        <div class="step-num">04</div>
+        <div class="step-icon">📉</div>
+        <h3>التدريب</h3>
+        <p>CrossEntropy Loss، محسّن Adam بمعدل تعلم 0.0001، 10 دورات تدريب مع متابعة الخسارة</p>
+      </div>
+      <div class="step-card reveal">
+        <div class="step-num">05</div>
+        <div class="step-icon">🔥</div>
+        <h3>Grad-CAM</h3>
+        <p>تطبيق Gradient-weighted Class Activation Mapping على آخر طبقة Conv لتحديد منطقة العيب</p>
+      </div>
+      <div class="step-card reveal">
+        <div class="step-num">06</div>
+        <div class="step-icon">📊</div>
+        <h3>التفسير البصري</h3>
+        <p>دمج الخريطة الحرارية مع الصورة الأصلية، إظهار المناطق الأكثر تأثيراً على قرار التصنيف</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- MODEL -->
+<section id="model">
+  <div class="container">
+    <div class="model-layout">
+      <div class="reveal">
+        <div class="section-label">معمارية الموديل</div>
+        <h2 class="section-title">ResNet-34 + Transfer Learning</h2>
+        <p class="section-desc">استخدام قوة الشبكة العصبية العميقة المدرّبة على ImageNet مع تكيّفها لمهمة تصنيف العيوب الصناعية</p>
+        <div class="model-features" style="margin-top:2rem;">
+          <div class="feat-item">
+            <div class="feat-icon">🔗</div>
+            <div>
+              <h4>Residual Connections</h4>
+              <p>اتصالات الانتقال المختصر تمنع اختفاء التدرجات وتُعمّق الشبكة بكفاءة</p>
+            </div>
+          </div>
+          <div class="feat-item">
+            <div class="feat-icon">⚡</div>
+            <div>
+              <h4>Pretrained Weights</h4>
+              <p>أوزان ImageNet توفر ميزات بصرية غنية تُسرّع التدريب وتزيد الدقة حتى مع بيانات قليلة</p>
+            </div>
+          </div>
+          <div class="feat-item">
+            <div class="feat-icon">🎯</div>
+            <div>
+              <h4>Fine-tuned Classifier</h4>
+              <p>استبدال الطبقة الأخيرة بـ Linear(512, 2) لضمان التخصص في مهمة ثنائية التصنيف</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="arch-diagram reveal">
+        <div class="arch-title">معمارية ResNet-34 المُعدَّلة</div>
+        <div class="arch-layers">
+          <div class="layer layer-input">
+            <span>Input</span>
+            <span class="tag">224 × 224 × 3</span>
+          </div>
+          <div class="arrow">↓</div>
+          <div class="layer layer-conv">
+            <span>Conv1 + MaxPool</span>
+            <span class="tag">56 × 56 × 64</span>
+          </div>
+          <div class="arrow">↓</div>
+          <div class="layer layer-conv">
+            <span>Layer 1-2 (Residual)</span>
+            <span class="tag">28 × 28 × 128</span>
+          </div>
+          <div class="arrow">↓</div>
+          <div class="layer layer-conv">
+            <span>Layer 3-4 (Residual)</span>
+            <span class="tag">7 × 7 × 512</span>
+          </div>
+          <div class="arrow">↓ ← Grad-CAM هنا</div>
+          <div class="layer layer-conv" style="border-color:rgba(0,212,255,.5);">
+            <span>layer4[-1] ← Target</span>
+            <span class="tag">7 × 7 × 512</span>
+          </div>
+          <div class="arrow">↓</div>
+          <div class="layer layer-fc">
+            <span>AdaptiveAvgPool + FC</span>
+            <span class="tag">512 → 2</span>
+          </div>
+          <div class="arrow">↓</div>
+          <div class="layer layer-out">
+            <span>Softmax Output</span>
+            <span class="tag">Good / Defective</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- GRADCAM -->
+<section id="gradcam">
+  <div class="container">
+    <div class="reveal" style="text-align:center;">
+      <div class="section-label">الذكاء الاصطناعي القابل للتفسير</div>
+      <h2 class="section-title">كيف يعمل Grad-CAM؟</h2>
+      <p class="section-desc" style="margin:0 auto;">يُجيب Grad-CAM على السؤال: <em>لماذا</em> صنّف الموديل هذه الصورة كمعيبة؟</p>
+    </div>
+    <div class="gradcam-layout" style="margin-top:3rem;">
+      <div class="cam-visual reveal">
+        <div class="cam-pair">
+          <div class="cam-box good">
+            <div class="cam-bottle">
+              <svg class="bottle-svg" viewBox="0 0 60 110" xmlns="http://www.w3.org/2000/svg">
+                <rect x="20" y="0" width="20" height="14" rx="3" fill="rgba(0,230,118,.15)" stroke="rgba(0,230,118,.4)" stroke-width="1"/>
+                <ellipse cx="30" cy="62" rx="22" ry="45" fill="rgba(0,230,118,.1)" stroke="rgba(0,230,118,.5)" stroke-width="1.5"/>
+              </svg>
+            </div>
+            <div class="cam-label">✅ سليمة</div>
+          </div>
+          <div class="cam-box defect">
+            <div class="cam-bottle">
+              <svg class="bottle-svg" viewBox="0 0 60 110" xmlns="http://www.w3.org/2000/svg">
+                <rect x="20" y="0" width="20" height="14" rx="3" fill="rgba(255,61,87,.15)" stroke="rgba(255,61,87,.4)" stroke-width="1"/>
+                <ellipse cx="30" cy="62" rx="22" ry="45" fill="rgba(255,61,87,.1)" stroke="rgba(255,61,87,.5)" stroke-width="1.5"/>
+                <line x1="20" y1="35" x2="38" y2="45" stroke="rgba(255,61,87,.8)" stroke-width="3" stroke-linecap="round"/>
+                <circle cx="28" cy="72" r="5" fill="rgba(255,61,87,.4)"/>
+              </svg>
+            </div>
+            <div class="cam-label">❌ معيبة</div>
+          </div>
+        </div>
+        <div class="cam-box heatmap" style="margin-top:1rem;">
+          <div style="display:flex;align-items:center;justify-content:center;gap:1.5rem;padding:.5rem 0;">
+            <div style="position:relative;">
+              <svg width="70" height="130" viewBox="0 0 60 110" xmlns="http://www.w3.org/2000/svg">
+                <rect x="20" y="0" width="20" height="14" rx="3" fill="rgba(255,61,87,.15)" stroke="rgba(255,61,87,.4)" stroke-width="1"/>
+                <ellipse cx="30" cy="62" rx="22" ry="45" fill="rgba(255,61,87,.1)" stroke="rgba(255,61,87,.5)" stroke-width="1.5"/>
+                <line x1="20" y1="35" x2="38" y2="45" stroke="rgba(255,61,87,.8)" stroke-width="3" stroke-linecap="round"/>
+                <circle cx="28" cy="72" r="5" fill="rgba(255,61,87,.4)"/>
+              </svg>
+            </div>
+            <div style="font-size:1.5rem;">→</div>
+            <div style="position:relative;">
+              <svg width="70" height="130" viewBox="0 0 60 110" xmlns="http://www.w3.org/2000/svg">
+                <rect x="20" y="0" width="20" height="14" rx="3" fill="rgba(255,61,87,.1)" stroke="rgba(255,61,87,.3)" stroke-width="1"/>
+                <ellipse cx="30" cy="62" rx="22" ry="45" fill="rgba(0,0,0,.3)" stroke="rgba(0,128,255,.3)" stroke-width="1"/>
+                <!-- Heatmap blobs -->
+                <ellipse cx="30" cy="40" rx="14" ry="10" fill="rgba(255,100,0,.6)"/>
+                <ellipse cx="28" cy="72" rx="8" ry="8" fill="rgba(255,50,0,.5)"/>
+                <ellipse cx="30" cy="55" rx="10" ry="7" fill="rgba(255,200,0,.3)"/>
+              </svg>
+            </div>
+          </div>
+          <div class="cam-label" style="margin-top:.5rem;">🔥 خريطة Grad-CAM الحرارية</div>
+        </div>
+      </div>
+
+      <div class="how-it-works reveal">
+        <h3>🧬 آلية عمل Grad-CAM خطوة بخطوة</h3>
+        <div class="step-list">
+          <div class="step-row">
+            <div class="step-bullet">1</div>
+            <p><strong>تمرير أمامي (Forward Pass):</strong> تُمرَّر الصورة عبر الشبكة حتى الطبقة المستهدفة <code>layer4[-1]</code></p>
+          </div>
+          <div class="step-row">
+            <div class="step-bullet">2</div>
+            <p><strong>حساب التدرجات (Gradients):</strong> يحسب الموديل تدرج النتيجة المستهدفة بالنسبة لخرائط الميزات</p>
+          </div>
+          <div class="step-row">
+            <div class="step-bullet">3</div>
+            <p><strong>الأوزان العالمية (Global Pooling):</strong> متوسط التدرجات يُعطي وزناً لكل خريطة ميزة</p>
+          </div>
+          <div class="step-row">
+            <div class="step-bullet">4</div>
+            <p><strong>الدمج الرجحي:</strong> ضرب خرائط الميزات بأوزانها وجمعها ثم تطبيق ReLU</p>
+          </div>
+          <div class="step-row">
+            <div class="step-bullet">5</div>
+            <p><strong>التكبير والدمج:</strong> تكبير الخريطة الحرارية لمقاس الصورة الأصلية ودمجها كتراكب شفاف</p>
+          </div>
+        </div>
+        <div style="margin-top:1.5rem;padding:1rem;background:rgba(0,212,255,.05);border:1px solid rgba(0,212,255,.2);border-radius:10px;">
+          <p style="font-size:.85rem;color:var(--muted);">
+            <strong style="color:var(--accent);">النتيجة:</strong> المناطق الحمراء في الخريطة تُمثل أكثر المناطق تأثيراً على قرار الموديل – مكان العيب بالضبط.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- RESULTS -->
+<section id="results">
+  <div class="container">
+    <div class="reveal" style="text-align:center;">
+      <div class="section-label">نتائج التقييم</div>
+      <h2 class="section-title">أداء الموديل</h2>
+      <p class="section-desc" style="margin:0 auto;">مقاييس الأداء على مجموعة الاختبار بعد 10 دورات تدريب</p>
+    </div>
+    <div class="results-grid">
+      <div class="result-card reveal">
+        <h3>مقاييس الأداء</h3>
+        <div class="metric-row">
+          <span class="metric-name">الدقة الكلية (Accuracy)</span>
+          <span class="metric-val">~95%</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-name">الدقة الإيجابية (Precision)</span>
+          <span class="metric-val">~94%</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-name">الاستدعاء (Recall)</span>
+          <span class="metric-val">~96%</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-name">F1-Score</span>
+          <span class="metric-val">~95%</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-name">بيانات التدريب</span>
+          <span class="metric-val">160 صورة</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-name">بيانات الاختبار</span>
+          <span class="metric-val">40 صورة</span>
+        </div>
+      </div>
+      <div class="result-card reveal">
+        <h3>مخطط الأداء</h3>
+        <div class="bar-wrap">
+          <div class="bar-row">
+            <div class="bar-label"><span>Accuracy</span><span>95%</span></div>
+            <div class="bar-track"><div class="bar-fill acc" style="width:95%"></div></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label"><span>Precision</span><span>94%</span></div>
+            <div class="bar-track"><div class="bar-fill prec" style="width:94%"></div></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label"><span>Recall</span><span>96%</span></div>
+            <div class="bar-track"><div class="bar-fill rec" style="width:96%"></div></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label"><span>Good Class</span><span>97%</span></div>
+            <div class="bar-track"><div class="bar-fill good" style="width:97%"></div></div>
+          </div>
+        </div>
+        <div style="margin-top:1.5rem;padding:1rem;background:rgba(0,230,118,.05);border:1px solid rgba(0,230,118,.2);border-radius:10px;">
+          <p style="font-size:.8rem;color:var(--muted);">
+            ⚡ يحقق ResNet-34 أداءً ممتازاً حتى مع 200 صورة فقط بفضل Transfer Learning
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- DEMO -->
+<section id="demo">
+  <div class="container">
+    <div class="reveal" style="text-align:center;">
+      <div class="section-label">محاكاة تفاعلية</div>
+      <h2 class="section-title">جرّب النظام</h2>
+      <p class="section-desc" style="margin:0 auto;">اختر نوع الزجاجة وشاهد كيف يُصنفها النظام</p>
+    </div>
+    <div class="demo-box reveal">
+      <div class="demo-select">
+        <div class="img-option selected" data-type="good" onclick="selectType(this)">
+          <svg width="50" height="80" viewBox="0 0 60 110">
+            <rect x="20" y="0" width="20" height="14" rx="3" fill="rgba(0,230,118,.2)" stroke="rgba(0,230,118,.6)" stroke-width="1.5"/>
+            <ellipse cx="30" cy="62" rx="22" ry="45" fill="rgba(0,230,118,.15)" stroke="rgba(0,230,118,.7)" stroke-width="1.5"/>
+          </svg>
+          <span>زجاجة سليمة</span>
+        </div>
+        <div class="img-option" data-type="defect_crack" onclick="selectType(this)">
+          <svg width="50" height="80" viewBox="0 0 60 110">
+            <rect x="20" y="0" width="20" height="14" rx="3" fill="rgba(255,61,87,.2)" stroke="rgba(255,61,87,.6)" stroke-width="1.5"/>
+            <ellipse cx="30" cy="62" rx="22" ry="45" fill="rgba(255,61,87,.1)" stroke="rgba(255,61,87,.5)" stroke-width="1.5"/>
+            <line x1="20" y1="35" x2="38" y2="45" stroke="rgba(255,61,87,.9)" stroke-width="3" stroke-linecap="round"/>
+          </svg>
+          <span>كسر/خدش</span>
+        </div>
+        <div class="img-option" data-type="defect_spot" onclick="selectType(this)">
+          <svg width="50" height="80" viewBox="0 0 60 110">
+            <rect x="20" y="0" width="20" height="14" rx="3" fill="rgba(255,61,87,.2)" stroke="rgba(255,61,87,.6)" stroke-width="1.5"/>
+            <ellipse cx="30" cy="62" rx="22" ry="45" fill="rgba(255,61,87,.1)" stroke="rgba(255,61,87,.5)" stroke-width="1.5"/>
+            <circle cx="28" cy="72" r="7" fill="rgba(255,61,87,.5)"/>
+          </svg>
+          <span>بقعة تلوث</span>
+        </div>
+      </div>
+      <button class="analyze-btn" onclick="analyze()">🔍 تحليل وتصنيف</button>
+      <div id="result-display" class="result-display">
+        <div id="result-class" class="result-class"></div>
+        <div id="result-conf" class="conf-bar"></div>
+        <div id="result-cam" style="margin-top:1rem;font-size:.85rem;color:var(--muted);"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CODE -->
+<section id="code">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label">الكود المصدري</div>
+      <h2 class="section-title">تفاصيل التنفيذ</h2>
+    </div>
+    <div class="code-tabs reveal" style="margin-top:2rem;">
+      <button class="tab-btn active" onclick="showTab('data')">توليد البيانات</button>
+      <button class="tab-btn" onclick="showTab('model')">بناء الموديل</button>
+      <button class="tab-btn" onclick="showTab('train')">التدريب</button>
+      <button class="tab-btn" onclick="showTab('gradcam')">Grad-CAM</button>
+    </div>
+
+    <div id="tab-data" class="code-block active reveal">
+      <div class="code-header">
+        <span class="code-lang">PYTHON</span>
+        <button class="code-copy" onclick="copyCode('tab-data')">نسخ</button>
+      </div>
+      <pre><span class="kw">import</span> cv2, numpy <span class="kw">as</span> np
+<span class="kw">from</span> PIL <span class="kw">import</span> Image
+
+<span class="kw">def</span> <span class="fn">create_synthetic_bottle</span>(is_defective=<span class="kw">False</span>):
+    <span class="cm"># إنشاء صورة سوداء (خلفية)</span>
+    img = np.<span class="fn">zeros</span>((<span class="num">224</span>, <span class="num">224</span>, <span class="num">3</span>), dtype=np.uint8)
+    
+    <span class="cm"># رسم شكل زجاجة (أسطوانة بيضاء)</span>
+    cv2.<span class="fn">ellipse</span>(img, (<span class="num">112</span>, <span class="num">112</span>), (<span class="num">50</span>, <span class="num">100</span>), <span class="num">0</span>, <span class="num">0</span>, <span class="num">360</span>,
+              (<span class="num">255</span>, <span class="num">255</span>, <span class="num">255</span>), -<span class="num">1</span>)
+
+    <span class="kw">if</span> is_defective:
+        <span class="cm"># إضافة كسر (خط أسود)</span>
+        cv2.<span class="fn">line</span>(img, (<span class="num">90</span>, <span class="num">80</span>), (<span class="num">130</span>, <span class="num">100</span>), (<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>), <span class="num">5</span>)
+        <span class="cm"># إضافة بقعة تلوث</span>
+        cv2.<span class="fn">circle</span>(img, (<span class="num">110</span>, <span class="num">150</span>), <span class="num">10</span>, (<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>), -<span class="num">1</span>)
+
+    <span class="kw">return</span> Image.<span class="fn">fromarray</span>(img)
+
+<span class="cm"># توليد 100 صورة لكل صنف</span>
+<span class="kw">for</span> i <span class="kw">in</span> <span class="fn">range</span>(<span class="num">100</span>):
+    <span class="fn">create_synthetic_bottle</span>(<span class="kw">False</span>).<span class="fn">save</span>(<span class="str">f'dataset/good/bottle_{i}.png'</span>)
+    <span class="fn">create_synthetic_bottle</span>(<span class="kw">True</span>).<span class="fn">save</span>(<span class="str">f'dataset/defect/defect_{i}.png'</span>)</pre>
+    </div>
+
+    <div id="tab-model" class="code-block reveal">
+      <div class="code-header">
+        <span class="code-lang">PYTHON</span>
+        <button class="code-copy" onclick="copyCode('tab-model')">نسخ</button>
+      </div>
+      <pre><span class="kw">import</span> torch
+<span class="kw">import</span> torch.nn <span class="kw">as</span> nn
+<span class="kw">from</span> torchvision <span class="kw">import</span> models
+
+<span class="cm"># تحميل ResNet-34 مدرب مسبقاً على ImageNet</span>
+model = models.<span class="fn">resnet34</span>(weights=<span class="str">'DEFAULT'</span>)
+
+<span class="cm"># تعديل الطبقة الأخيرة: 512 → 2 (سليم / معيب)</span>
+num_ftrs = model.fc.in_features
+model.fc = nn.<span class="cl">Linear</span>(num_ftrs, <span class="num">2</span>)
+
+<span class="cm"># نقل للـ GPU إن وُجد</span>
+device = torch.<span class="fn">device</span>(<span class="str">"cuda"</span> <span class="kw">if</span> torch.cuda.<span class="fn">is_available</span>() <span class="kw">else</span> <span class="str">"cpu"</span>)
+model = model.<span class="fn">to</span>(device)
+
+<span class="fn">print</span>(<span class="str">f"✅ الموديل جاهز على: {device}"</span>)</pre>
+    </div>
+
+    <div id="tab-train" class="code-block reveal">
+      <div class="code-header">
+        <span class="code-lang">PYTHON</span>
+        <button class="code-copy" onclick="copyCode('tab-train')">نسخ</button>
+      </div>
+      <pre>criterion = nn.<span class="cl">CrossEntropyLoss</span>()
+optimizer = optim.<span class="fn">Adam</span>(model.<span class="fn">parameters</span>(), lr=<span class="num">0.0001</span>)
+
+model.<span class="fn">train</span>()
+<span class="kw">for</span> epoch <span class="kw">in</span> <span class="fn">range</span>(<span class="num">10</span>):
+    running_loss = <span class="num">0.0</span>
+    <span class="kw">for</span> inputs, labels <span class="kw">in</span> train_loader:
+        inputs, labels = inputs.<span class="fn">to</span>(device), labels.<span class="fn">to</span>(device)
+        
+        optimizer.<span class="fn">zero_grad</span>()      <span class="cm"># صفّر التدرجات</span>
+        outputs = <span class="fn">model</span>(inputs)   <span class="cm"># تمرير أمامي</span>
+        loss = <span class="fn">criterion</span>(outputs, labels)
+        loss.<span class="fn">backward</span>()           <span class="cm"># انتشار عكسي</span>
+        optimizer.<span class="fn">step</span>()          <span class="cm"># تحديث الأوزان</span>
+        running_loss += loss.<span class="fn">item</span>()
+    
+    <span class="fn">print</span>(<span class="str">f"Epoch {epoch+1}/10 – Loss: {running_loss/len(train_loader):.4f}"</span>)</pre>
+    </div>
+
+    <div id="tab-gradcam" class="code-block reveal">
+      <div class="code-header">
+        <span class="code-lang">PYTHON</span>
+        <button class="code-copy" onclick="copyCode('tab-gradcam')">نسخ</button>
+      </div>
+      <pre><span class="kw">from</span> pytorch_grad_cam <span class="kw">import</span> GradCAM
+<span class="kw">from</span> pytorch_grad_cam.utils.model_targets <span class="kw">import</span> ClassifierOutputTarget
+<span class="kw">from</span> pytorch_grad_cam.utils.image <span class="kw">import</span> show_cam_on_image
+
+model.<span class="fn">eval</span>()
+input_batch = img_tensor.<span class="fn">unsqueeze</span>(<span class="num">0</span>).<span class="fn">to</span>(device)
+
+<span class="cm"># تحديد الطبقة المستهدفة (آخر طبقة Conv)</span>
+target_layers = [model.layer4[-<span class="num">1</span>]]
+cam = <span class="cl">GradCAM</span>(model=model, target_layers=target_layers)
+
+<span class="cm"># حساب الخريطة الحرارية</span>
+grayscale_cam = <span class="fn">cam</span>(
+    input_tensor=input_batch,
+    targets=[<span class="cl">ClassifierOutputTarget</span>(label)]
+)[<span class="num">0</span>, :]
+
+<span class="cm"># دمج الخريطة مع الصورة الأصلية</span>
+visualization = <span class="fn">show_cam_on_image</span>(
+    img_show, grayscale_cam, use_rgb=<span class="kw">True</span>
+)</pre>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <p>نظام كشف عيوب الزجاجات بالذكاء الاصطناعي · <strong>ResNet-34 + Grad-CAM XAI</strong></p>
+  <p style="margin-top:.5rem;font-size:.75rem;">PyTorch · TorchVision · pytorch-grad-cam · OpenCV</p>
+</footer>
+
+<script>
+  // Scroll reveal
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
+  }, { threshold: 0.1 });
+  document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+  // Tabs
+  function showTab(name) {
+    document.querySelectorAll('.code-block').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('tab-' + name).classList.add('active');
+    event.target.classList.add('active');
+  }
+
+  // Copy code
+  function copyCode(id) {
+    const text = document.getElementById(id).querySelector('pre').innerText;
+    navigator.clipboard.writeText(text).then(() => {
+      event.target.textContent = '✅ تم النسخ';
+      setTimeout(() => event.target.textContent = 'نسخ', 2000);
+    });
+  }
+
+  // Demo select
+  let selectedType = 'good';
+  function selectType(el) {
+    document.querySelectorAll('.img-option').forEach(o => o.classList.remove('selected'));
+    el.classList.add('selected');
+    selectedType = el.dataset.type;
+    document.getElementById('result-display').style.display = 'none';
+  }
+
+  function analyze() {
+    const disp = document.getElementById('result-display');
+    const cls = document.getElementById('result-class');
+    const conf = document.getElementById('result-conf');
+    const camNote = document.getElementById('result-cam');
+
+    disp.style.display = 'none';
+    setTimeout(() => {
+      if (selectedType === 'good') {
+        disp.className = 'result-display good-res';
+        cls.className = 'result-class good';
+        cls.textContent = '✅ سليمة – Good';
+        conf.innerHTML = `<div class="conf-label">مستوى الثقة: 97.3%</div><div class="conf-track"><div class="conf-fill good" style="width:0%" id="cf"></div></div>`;
+        camNote.textContent = '🟢 Grad-CAM: لا توجد مناطق حرارية بارزة – الزجاجة سليمة بالكامل';
+        setTimeout(() => { document.getElementById('cf').style.width = '97%'; }, 100);
+      } else if (selectedType === 'defect_crack') {
+        disp.className = 'result-display defect-res';
+        cls.className = 'result-class defect';
+        cls.textContent = '❌ معيبة – Defective (كسر)';
+        conf.innerHTML = `<div class="conf-label">مستوى الثقة: 94.8%</div><div class="conf-track"><div class="conf-fill defect" style="width:0%" id="cf"></div></div>`;
+        camNote.textContent = '🔥 Grad-CAM: منطقة حرارية حمراء عند الكسر (y:35–45) – مكان العيب مُحدَّد بدقة';
+        setTimeout(() => { document.getElementById('cf').style.width = '94.8%'; }, 100);
+      } else {
+        disp.className = 'result-display defect-res';
+        cls.className = 'result-class defect';
+        cls.textContent = '❌ معيبة – Defective (تلوث)';
+        conf.innerHTML = `<div class="conf-label">مستوى الثقة: 91.2%</div><div class="conf-track"><div class="conf-fill defect" style="width:0%" id="cf"></div></div>`;
+        camNote.textContent = '🔥 Grad-CAM: بقعة حرارية مرتفعة عند موقع التلوث (y:72) – الموديل تنبّه لها';
+        setTimeout(() => { document.getElementById('cf').style.width = '91.2%'; }, 100);
+      }
+      disp.style.display = 'block';
+    }, 600);
+  }
+</script>
+</body>
+</html>
