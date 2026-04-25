@@ -32,7 +32,7 @@ To evaluate model stability, an ablation study was conducted by altering the lea
 * **Conclusion:** Fine-tuning pre-trained models (like ResNet) requires exceptionally small learning rates to preserve existing feature extractors.
 
 **Training Convergence (Loss Curve):**
-![Training Loss](training_loss.png)
+![Training Loss]training_loss.png.png)
 
 
 
