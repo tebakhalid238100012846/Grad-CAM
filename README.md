@@ -16,7 +16,7 @@ The model successfully localizes the artificial defects. Below is a comparison b
 
 | Normal Bottle (Good) ✅ | Defective Bottle (Grad-CAM) ❌ |
 | :---: | :---: |
-| ![Normal Bottle](good_bottle.png) | ![Defective Bottle](defective_bottle.png) |
+| ![Normal Bottle](good_bottle.png.png) | ![Defective Bottle](good_bottle.png.png) |
 
 System Architecture & Methodology
 * **Dataset:** A synthetic dataset of 200 bottle images (100 Good / 100 Defective), inspired by the MVTec Anomaly Detection dataset.
